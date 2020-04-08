@@ -454,7 +454,8 @@ sim = (
         org_gohome_cost = lambda x: x[[col for col in x.columns if 'gohome' in col]].sum(axis=1),
         org_skills = lambda x: x[[col for col in x.columns if 'total_skills' in col]].sum(axis=1),
         org_excess_after_pref = lambda x: x[[col for col in x.columns if 'excess_after_pref' in col]].sum(axis=1),
-        all_team_sol_flag = lambda x: x[[col for col in x.columns if 'skill_sol_flag' in col]].sum(axis=1)
+        all_team_sol_flag = lambda x: x[[col for col in x.columns if 'skill_sol_flag' in col and 'gohome' not in col]].sum(axis=1),
+        all_team_gohome_sol_flag = lambda x: x[[col for col in x.columns if 'gohome_skill_sol_flag' in col]].sum(axis=1)
     )
     .assign(
         org_net_cost = lambda x: x['org_work_cost'] + x['org_train_cost']
@@ -497,22 +498,14 @@ plt.title('Team skills upgrade trend')
 
 # ### Go home vs Cross-training
 
-# **Find workaround to explain more cases of failures in case of gohome as compared to crosstraining**
+# **Reword and replot this section**
 
-
-
-# +
-tdf = sim.copy()
-tdf['org_cost_with_crosstraining'] = tdf['org_work_cost'] + tdf['org_train_cost']
-tdf['org_cost_with_gohome'] = tdf['org_gohome_cost']
-
-# tdf['org_cost_with_crosstraining'] = tdf['org_cost_with_crosstraining'].rolling(30).mean()
-# tdf['org_cost_with_gohome'] = tdf['org_cost_with_gohome'].rolling(30).mean()
-
-# tdf = tdf.melt(id_vars='day', value_vars=['org_cost_with_crosstraining', 'org_cost_with_gohome'], var_name='Strategy')
-# sns.relplot(x='day', y='value', data=tdf, hue='Strategy', kind='scatter', aspect=3)
-
-tdf['cost_diff'] = tdf['org_cost_with_gohome'] - tdf['org_cost_with_crosstraining']
-tdf['cost_diff'] = tdf['cost_diff'].rolling(30).mean()
-sns.relplot(x='day', y='cost_diff', data=tdf, kind='line', aspect=3)
-
+(
+    sim[['day', 'all_team_sol_flag', 'all_team_gohome_sol_flag']]
+    .assign(
+        all_team_sol_flag = lambda x: x['all_team_sol_flag'].rolling(30).mean(),
+        all_team_gohome_sol_flag = lambda x: x['all_team_gohome_sol_flag'].rolling(30).mean()
+    )
+    .melt(id_vars='day', value_vars=['all_team_sol_flag', 'all_team_gohome_sol_flag'], var_name='strategy')
+    .pipe((sns.relplot, 'data'), x='day', y='value', hue='strategy', kind='line', aspect=3)
+)
