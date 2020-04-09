@@ -55,13 +55,6 @@ def read_data(skill_filename=skill_filename, attendance_filename=attendance_file
 
 # ### Employee attendance
 
-# %%time
-_ = generate_attendance(attendance)
-
-# %%time
-get_employees(attendance)
-
-
 # +
 def generate_attendance(att):
     att_prob = att.mean(axis=1) 
@@ -246,42 +239,6 @@ def crosstraining_update(excess_people, skills, preference_assignment, crosstrai
 
 # -
 
-# # Main pipeline
-
-# +
-# Read in all the team data into a dictionary
-
-data = read_data()
-# -
-
-data['A']['skills']
-
-# +
-# Finish skill based optimization and capture feasibility status from teams
-
-skill_data = dict()
-excess_from_skill_assignment = list()
-
-for team in teams:
-    people_present = generate_attendance(data[team]['attendance'])
-    
-    team_skill_results = dict()
-    team_skill_results['status'], team_skill_results['assignment'], excess = \
-    skill_based_optimize(data[team]['skills'], people_present)
-    if excess:
-        excess_from_skill_assignment.extend(excess)
-    skill_data[team] = team_skill_results
-# -
-
-excess_from_skill_assignment
-
-failed_teams = [k for k, v in skill_data.items() if v['status'] == False]
-
-failed_teams
-
-preference_assignment, excess_people = preference_maximize(skill_assignment, skills, preference)
-preference_assignment
-
 # # Team scope simulations
 
 # Trackable things
@@ -310,12 +267,10 @@ preference_assignment
 NUMBER_OF_DAYS = 1000
 
 
-# +
 def run_team_simulation(team, unit_cost=UNIT_COST, number_of_days=NUMBER_OF_DAYS):
     metrics = dict()  # Stores all simulation data
     crosstrain_daycount = dict()
 
-#         metrics['day'] = range(1, number_of_days + 1)  # Day numbers in simulation
     team_metrics = [
         'skill_sol_flag', 'pref_sol_flag', 'total_skills', 
         'work_cost', 'train_cost', 'excess_after_skill', 
@@ -324,7 +279,6 @@ def run_team_simulation(team, unit_cost=UNIT_COST, number_of_days=NUMBER_OF_DAYS
 
     for metric in team_metrics:
         metrics[f'Team_{team}_{metric}'] = list()  # Initialize all metrics to empty list
-
 
     skills = data[team]['skills']  # Team skills data
     attendance = data[team]['attendance']  # Team attendance data
@@ -387,22 +341,28 @@ def run_team_simulation(team, unit_cost=UNIT_COST, number_of_days=NUMBER_OF_DAYS
 
 # +
 # All team simulations, independently
+# This function parallelizes all simulations to shorten simulation times by using all cpu cores
 
 def simulate(unit_cost=UNIT_COST):   
     pool = Pool()                         # Create a multiprocessing Pool
-    team_metric_dicts = pool.map(run_team_simulation, teams)  # process data_inputs iterable with pool
+    team_metric_dicts = pool.map(run_team_simulation, teams)  # process teams iterable with pool
     return team_metric_dicts
 
 
 # -
 
 # %%time
-data = read_data()  # Read data
+# Simulation run
+data = read_data()
 x = simulate()
+
+# +
+# Combine all team metric dictionaries into a single metric dictionary
 
 metrics = dict()
 for d in x:
     metrics.update(d)
+# -
 
 sim = (
     pd.DataFrame(metrics)
@@ -412,36 +372,11 @@ sim = (
 
 sim.to_csv(f'./simulation_output/team_scope_{NUMBER_OF_DAYS}_days_with_gohome.csv', index=False)
 
-# +
-# sim.to_csv(f'./simulation_output/team_scope_{number_of_days}_days.csv', index=False)
-# -
-
 # -----
 
-# ### Outputs
+# # Result visualization
 
 sim = pd.read_csv(f'./simulation_output/team_scope_{NUMBER_OF_DAYS}_days_with_gohome.csv')
-
-# Trackable things
-#
-# Team level
-# - skill assignment optimal solution flag
-# - preference assignment optimal solution flag
-# - skill sum
-# - working cost
-# - training cost
-# - excess people count after skill assignment
-# - excess people count after preference assignment
-#
-# Org level
-# - org work cost
-# - org train cost
-# - org net cost
-# - org skills
-# - org excess after pref
-#
-# Derived
-# - rolling solution flag average
 
 # +
 # Org level metric calculation
@@ -496,16 +431,32 @@ for i, team in enumerate(teams):
     sns.lineplot(x='day', y=f'Team_{team}_total_skills', ax=ax, data=sim, color=sns.color_palette()[i], label=f'Team {team}')
 plt.title('Team skills upgrade trend')
 
-# ### Go home vs Cross-training
+# ### Go home vs Cross-training team success count
 
-# **Reword and replot this section**
-
-(
+g = (
     sim[['day', 'all_team_sol_flag', 'all_team_gohome_sol_flag']]
     .assign(
-        all_team_sol_flag = lambda x: x['all_team_sol_flag'].rolling(30).mean(),
-        all_team_gohome_sol_flag = lambda x: x['all_team_gohome_sol_flag'].rolling(30).mean()
+        crosstraining_policy = lambda x: x['all_team_sol_flag'].rolling(30).mean(),
+        go_home_policy = lambda x: x['all_team_gohome_sol_flag'].rolling(30).mean()
     )
-    .melt(id_vars='day', value_vars=['all_team_sol_flag', 'all_team_gohome_sol_flag'], var_name='strategy')
-    .pipe((sns.relplot, 'data'), x='day', y='value', hue='strategy', kind='line', aspect=3)
+    .melt(id_vars='day', value_vars=['crosstraining_policy', 'go_home_policy'], var_name='strategy', value_name='Team count')
+    .pipe((sns.relplot, 'data'), x='day', y='Team count', hue='strategy', kind='line', aspect=3)
 )
+plt.title('Number of teams that find a feasible solution (30-day rolling average)')
+
+# ### Go home vs cross-training cost
+
+# +
+team = 'C'
+
+tdf = sim[['day', f'Team_{team}_skill_sol_flag', f'Team_{team}_gohome_cost', f'Team_{team}_train_cost', f'Team_{team}_work_cost']]
+tdf[f'Team_{team}_crosstrain_cost'] = tdf[f'Team_{team}_work_cost'] + tdf[f'Team_{team}_train_cost']
+# tdf = tdf[tdf['day'] <= 400]
+
+fig, ax = plt.subplots(figsize=(15, 5))
+
+sns.scatterplot(x='day', y=f'Team_{team}_crosstrain_cost', data=tdf, ax=ax, color=sns.color_palette()[0], label='Crosstrain policy')
+sns.scatterplot(x='day', y=f'Team_{team}_gohome_cost', data=tdf, ax=ax, color=sns.color_palette()[1], label='Go home policy')
+ax.set_xlim(0, 400)
+ax.set_ylim(3500, 5500)
+plt.title(f'Company overall cost for crosstraining and go home strategies for Team {team}')
