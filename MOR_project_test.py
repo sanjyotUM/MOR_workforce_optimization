@@ -3,17 +3,17 @@ import random
 import datetime
 from multiprocessing import Pool
 
-from tqdm import tqdm
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+
 sns.set_style('whitegrid')
 from IPython.display import set_matplotlib_formats
 set_matplotlib_formats('retina')
 pd.set_option('max_column', None)
 
-# # !pip install pulp
+# !pip install pulp
 from pulp import *
 # -
 
@@ -239,6 +239,12 @@ def crosstraining_update(excess_people, skills, preference_assignment, crosstrai
 
 # -
 
+# ### Calculate preferences matched in an assignment
+
+def preference_matched(assignment, preference):
+    return ((assignment == 1) & (preference == 1)).sum().sum()
+
+
 # # Team scope simulations
 
 # Trackable things
@@ -274,7 +280,8 @@ def run_team_simulation(team, unit_cost=UNIT_COST, number_of_days=NUMBER_OF_DAYS
     team_metrics = [
         'skill_sol_flag', 'pref_sol_flag', 'total_skills', 
         'work_cost', 'train_cost', 'excess_after_skill', 
-        'excess_after_pref', 'present', 'gohome_cost', 'gohome_skill_sol_flag'
+        'excess_after_pref', 'present', 'gohome_cost', 'gohome_skill_sol_flag',
+        'pref_match_after_skill', 'pref_match_after_pref'
     ]  # Metrics to track
 
     for metric in team_metrics:
@@ -299,6 +306,7 @@ def run_team_simulation(team, unit_cost=UNIT_COST, number_of_days=NUMBER_OF_DAYS
 
         if skill_assignment_status:
             metrics[f'Team_{team}_excess_after_skill'].append(len(skill_excess))  # Excess people (not assigned)
+            metrics[f'Team_{team}_pref_match_after_skill'].append(preference_matched(skill_assignment, preference))  # Pref matched people after skill assignment
 
             preference_status, preference_assignment, preference_excess, assigned_people_cost = \
             preference_maximize(skill_assignment, skills, preference)  # Preference match maximization
@@ -308,6 +316,7 @@ def run_team_simulation(team, unit_cost=UNIT_COST, number_of_days=NUMBER_OF_DAYS
             if preference_status:
                 metrics[f'Team_{team}_excess_after_pref'].append(len(preference_excess))  # Excess people from preference problem
                 metrics[f'Team_{team}_work_cost'].append(assigned_people_cost)  # Cost of people working
+                metrics[f'Team_{team}_pref_match_after_pref'].append(preference_matched(preference_assignment, preference))  # Pref matched people after pref assignment
 
                 skills, crosstrain_daycount, crosstrain_cost = \
                 crosstraining_update(preference_excess, skills, preference_assignment, crosstrain_daycount)  # Cross-training assignment
@@ -322,6 +331,8 @@ def run_team_simulation(team, unit_cost=UNIT_COST, number_of_days=NUMBER_OF_DAYS
             metrics[f'Team_{team}_excess_after_pref'].append(None)
             metrics[f'Team_{team}_work_cost'].append(None)
             metrics[f'Team_{team}_train_cost'].append(None)
+            metrics[f'Team_{team}_pref_match_after_skill'].append(None)
+            metrics[f'Team_{team}_pref_match_after_pref'].append(None)
 
 
         # Go home workflow
@@ -460,3 +471,29 @@ sns.scatterplot(x='day', y=f'Team_{team}_gohome_cost', data=tdf, ax=ax, color=sn
 ax.set_xlim(0, 400)
 ax.set_ylim(3500, 5500)
 plt.title(f'Company overall cost for crosstraining and go home strategies for Team {team}')
+# -
+
+# ### Improvement of preference matching from skill based to preference based assignment
+
+# +
+tmp = (
+    sim
+    .dropna(subset=[x for x in sim.columns if 'pref_match' in x])
+    .copy()
+)
+keep_cols = ['day']
+for team in teams:
+    this_col = f'{team}'
+    tmp[this_col] = tmp[f'Team_{team}_pref_match_after_pref'] - tmp[f'Team_{team}_pref_match_after_skill']
+    tmp[this_col] = tmp[this_col].rolling(20).mean()
+    keep_cols.append(this_col)
+
+g = (
+    tmp[keep_cols]
+    .reset_index(drop=True)
+    .assign(day = lambda x: x.index)
+    .melt(id_vars='day', value_vars=list(set(keep_cols) - set(['day'])), var_name='Team', value_name='Preference improvement')
+    .pipe((sns.catplot, 'data'), x='Team', y='Preference improvement', aspect=1, kind='box', color='green', order=teams)
+)
+g.ax.set_ylim(0, 8)
+g.ax.set_title('Preference improvement after preference-based assigment')
